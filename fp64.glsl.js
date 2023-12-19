@@ -1,3 +1,6 @@
+// luma.gl, MIT license
+// Copyright (c) vis.gl contributors
+
 export const glsl = `#define SHADER_NAME transform-model_vertex
 
 #define SHADER_TYPE_VERTEX
