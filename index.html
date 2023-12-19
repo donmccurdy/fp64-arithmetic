@@ -23,13 +23,20 @@
          */
 
         const params = new URLSearchParams(location.search);
-        const api = {operator: params.has('operator') ? params.get('operator') : 'sum_fp64'}
+
+        const api = {
+            operator: params.has('operator') ? params.get('operator') : 'sum_fp64',
+            lang: params.has('lang') ? params.get('lang') : 'GLSL 3.0',
+        }
+
         const gui = new GUI();
+        gui.add(api, 'operator', ['sum_fp64', 'sub_fp64', 'mul_fp64', 'div_fp64']);
+        gui.add(api, 'lang', ['GLSL 1.0', 'GLSL 3.0']);
+        gui.onChange(reload);
 
-        gui.add(api, 'operator', ['sum_fp64', 'sub_fp64', 'mul_fp64', 'div_fp64']).onChange(reload);
-
-        function reload(op) {
-            params.set('operator', op);
+        function reload() {
+            params.set('operator', api.operator);
+            params.set('lang', api.lang);
             location.href = '/?' + params.toString();
         }
 
@@ -83,27 +90,29 @@
             return program;
         };
 
+        const IS_GLSL_300 = api.lang === 'GLSL 3.0';
+
         const vs = `\
-        #version 300 es
+        ${IS_GLSL_300 ? '#version 300 es' : ''}
 
         ${glsl}
 
-        layout(location = 0) in vec2 a;
-        layout(location = 1) in vec2 b;
-        invariant out vec2 result;
+        ${IS_GLSL_300 ? 'layout(location = 0) in' : 'attribute'} vec2 a;
+        ${IS_GLSL_300 ? 'layout(location = 1) in' : 'attribute'} vec2 b;
+        invariant ${IS_GLSL_300 ? 'out' : 'varying'} vec2 result;
         void main(void) {
           result = ${api.operator}(a, b);
         }`;
 
         const fs = `\
-        #version 300 es
+        ${IS_GLSL_300 ? '#version 300 es' : ''}
+
         precision highp float;
         precision highp int;
 
-        in vec2 result;
+        ${IS_GLSL_300 ? 'in' : 'varying'} vec2 result;
 
         void main(){}`;
-
 
         const program = createProgram(gl, vs, fs, ['result']);
 
@@ -356,7 +365,9 @@
 
         document.body.appendChild(table);
 
-        document.body.innerHTML += `<p>Passed: ${passed}<br>Failed: ${failed}<p>`;
+        const status = document.createElement('p')
+        status.innerHTML = `Passed: ${passed}<br>Failed: ${failed}`;
+        document.body.appendChild(status);
 
         console.table(rows);
         console.log(`Passed: ${passed}`);
