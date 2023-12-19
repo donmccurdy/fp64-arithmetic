@@ -1,0 +1,31 @@
+body {
+    color: #F0F0F0;
+    font-family: Monospace;
+    text-align: center;
+    background-color: #020202;
+    margin-top: 5em;
+}
+
+p {
+    padding: 5px;
+    text-wrap: balance;
+    max-width: 50em;
+    margin: 1em auto;
+}
+
+table {
+    border: 1px solid #d0d0d0;
+    border-collapse: collapse;
+    margin: 0 auto;
+}
+
+thead tr {
+    background: #202020;
+    font-weight: bold;
+}
+
+td {
+    text-align: right;
+    padding: .2em .5em;
+    border: 1px solid #d0d0d0;
+}

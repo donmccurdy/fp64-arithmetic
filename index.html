@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <title>transform feedback precision repro</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <h1>FP64 arithmetic</h1>
+    <p>Test for emulated FP64 arithmetic in GLSL on Apple GPUs.</p>
+
+    <script type="module">
+        import { GUI } from './lil-gui.module.js';
+        import { glsl } from './fp64.glsl.js';
+
+        const EPS = 1e-11;
+
+        /**********************************************************************
+         * GUI
+         */
+
+        const params = new URLSearchParams(location.search);
+        const api = {operator: params.has('operator') ? params.get('operator') : 'sum_fp64'}
+        const gui = new GUI();
+
+        gui.add(api, 'operator', ['sum_fp64', 'sub_fp64', 'mul_fp64', 'div_fp64']).onChange(reload);
+
+        function reload(op) {
+            params.set('operator', op);
+            location.href = '/?' + params.toString();
+        }
+
+        /**********************************************************************
+         * WEBGL CONTEXT
+         */
+
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 64;
+        document.body.appendChild(canvas);
+
+        const gl = canvas.getContext('webgl2', { antialias: false });
+        if(!gl) throw new Error('WebGL 2 required.');
+
+        /**********************************************************************
+         * SHADER
+         */
+
+        function createShader(gl, source, type) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            return shader;
+        }
+
+        function createProgram(gl, vertexShaderSource, fragmentShaderSource, varyings) {
+            const program = gl.createProgram();
+            const vshader = createShader(gl, vertexShaderSource, gl.VERTEX_SHADER);
+            const fshader = createShader(gl, fragmentShaderSource, gl.FRAGMENT_SHADER);
+            gl.attachShader(program, vshader);
+            gl.deleteShader(vshader);
+            gl.attachShader(program, fshader);
+            gl.deleteShader(fshader);
+
+            if (varyings) {
+                gl.transformFeedbackVaryings(program, varyings, gl.SEPARATE_ATTRIBS);
+            }
+
+            gl.linkProgram(program);
+
+            let log = gl.getProgramInfoLog(program);
+            if (log) console.log(log);
+
+            log = gl.getShaderInfoLog(vshader);
+            if (log) console.log(log);
+
+            log = gl.getShaderInfoLog(fshader);
+            if (log) console.log(log);
+
+            return program;
+        };
+
+        const vs = `\
+        #version 300 es
+
+        ${glsl}
+
+        layout(location = 0) in vec2 a;
+        layout(location = 1) in vec2 b;
+        invariant out vec2 result;
+        void main(void) {
+          result = ${api.operator}(a, b);
+        }`;
+
+        const fs = `\
+        #version 300 es
+        precision highp float;
+        precision highp int;
+
+        in vec2 result;
+
+        void main(){}`;
+
+
+        const program = createProgram(gl, vs, fs, ['result']);
+
+        /**********************************************************************
+         * FIXTURES
+         */
+
+        export const FIXTURES = [
+          {a: 2, b: 2, ignoreFor: {}},
+          {a: 0.1, b: 0.1, ignoreFor: {apple: ['sum_fp64', 'mul_fp64', 'div_fp64']}},
+          {a: 3.0e-19, b: 3.3e13, ignoreFor: {apple: ['sum_fp64']}},
+          {a: 9.9e-40, b: 1.7e3, ignoreFor: {}},
+          {a: 1.5e-36, b: 1.7e-16, ignoreFor: {}},
+          {a: 9.4e-26, b: 51, ignoreFor: {}},
+          {a: 6.7e-20, b: 0.93, ignoreFor: {apple: ['sum_fp64']}},
+
+          // mul_fp64: Large numbers once multipled, can't be represented by 32 bit precision and Math.fround() returns NAN
+          // sqrt_fp64: Fail on INTEL with margin 3.906051071870294e-12
+          {a: 2.4e3, b: 5.9e31, ignoreFor: {all: ['mul_fp64'], intel: ['sqrt_fp64'], apple: ['sum_fp64']}},
+
+          // div_fp64 fails on INTEL with margin 1.7318642528355118e-12
+          // sqrt_fp64 fails on INTEL with margin 1.5518878351528786e-12
+          {a: 1.4e9, b: 6.3e5, ignoreFor: {intel: ['div_fp64', 'sqrt_fp64'], apple: ['mul_fp64', 'div_fp64']}},
+
+          // div fails on INTEL with margin 1.7886288892678105e-14
+          // sqrt fails on INTEL with margin 2.5362810256331708e-12
+          {a: 3.0e9, b: 4.3e-23, ignoreFor: {intel: ['div_fp64', 'sqrt_fp64'], apple: ['div_fp64']}},
+
+          // div fail on INTEL with margin 1.137354350370519e-12
+          {a: 1.7e-19, b: 2.7e-27, ignoreFor: {intel: ['div_fp64'], apple: ['div_fp64']}},
+
+          // div_fp64 fails on INTEL with margin 2.7291999999999997e-12
+          // sqrt_fp64 fails on INTEL with margin 3.501857471494295e-12
+          {a: 0.3, b: 3.2e-16, ignoreFor: {intel: ['div_fp64', 'sqrt_fp64'], apple: ['div_fp64']}},
+
+          // mul_fp64 : fails since result can't be represented by 32 bit floats
+          // div_fp64 : fails on INTEL with margin 1.9999999999999994e-15
+          // sqrt_fp64 : fails on INTEL with margin 1.832115697751484e-12
+          {a: 4.1e30, b: 8.2e15, ignoreFor: {all: ['mul_fp64'], intel: ['div_fp64', 'sqrt_fp64'], apple: ['div_fp64']}},
+
+          // Fails on INTEL, margin 3.752606081210107e-12
+          {a: 6.2e3, b: 6.3e10, ignoreFor: {intel: ['sqrt_fp64'], apple: ['sum_fp64', 'mul_fp64']}},
+          // Fails on INTEL, margin 3.872578286363912e-13
+          {a: 2.5e2, b: 5.1e-21, ignoreFor: {intel: ['sqrt_fp64'], apple: ['div_fp64']}},
+          // Fails on INTEL, margin 1.5332142001740705e-12
+          {a: 96, b: 1.7e4, ignoreFor: {intel: ['sqrt_fp64'], apple: ['div_fp64']}},
+          // // Fail on INTEL, margin 1.593162047558726e-12
+          {a: 0.27, b: 2.3e16, ignoreFor: {intel: ['sqrt_fp64'], apple: ['sum_fp64', 'mul_fp64']}},
+          // Fails on INTEL, margin 1.014956357028767e-12
+          {a: 18, b: 9.1e-9, ignoreFor: {intel: ['sqrt_fp64'], apple: ['div_fp64']}}
+        ];
+
+        export const OPS = {
+            sum_fp64: (a, b) => a + b,
+            sub_fp64: (a, b) => a - b,
+            mul_fp64: (a, b) => a * b,
+            div_fp64: (a, b) => a / b,
+        }
+
+        export function getFixtureArrays(vendor, op) {
+            const fixtures = FIXTURES;
+            const a = new Array(fixtures.length);
+            const b = new Array(fixtures.length);
+            const expected = new Array(fixtures.length);
+            const a_fp64 = new Float32Array(fixtures.length * 2);
+            const b_fp64 = new Float32Array(fixtures.length * 2);
+            const expected_fp64 = new Float32Array(fixtures.length * 2);
+
+            for (let i = 0; i < fixtures.length; i++) {
+                const fixture = fixtures[i];
+                a[i] = fixture.a;
+                b[i] = fixture.b;
+                expected[i] = OPS[op](a[i], b[i]);
+
+                fp64ify(a[i], a_fp64, i * 2);
+                fp64ify(b[i], b_fp64, i * 2);
+                fp64ify(expected[i], expected_fp64, i * 2);
+            }
+
+            return {a, b, expected, a_fp64, b_fp64, expected_fp64};
+        }
+
+        /**
+         * Calculate WebGL 64 bit float
+         * @param a  - the input float number
+         * @param out - the output array. If not supplied, a new array is created.
+         * @param startIndex - the index in the output array to fill from. Default 0.
+         * @returns - the fp64 representation of the input number
+         */
+        export function fp64ify(a, out = [], startIndex = 0) {
+          const hiPart = Math.fround(a);
+          const loPart = a - hiPart;
+          out[startIndex] = hiPart;
+          out[startIndex + 1] = loPart;
+          return out;
+        }
+
+        /**********************************************************************
+         * BUFFERS AND BINDINGS
+         */
+
+        const { a, b, expected, a_fp64, b_fp64, expected_fp64 } = getFixtureArrays('apple', api.operator);
+        const VERTEX_COUNT = expected.length;
+        const result_fp64 = new Float32Array(VERTEX_COUNT * 2);
+
+        console.log({a, b, expected, a_fp64, b_fp64, expected_fp64});
+
+        const BufferType = {
+            A: 0,
+            B: 1,
+            RESULT: 2,
+            MAX: 3,
+        };
+
+        const buffers = [
+            gl.createBuffer(),
+            gl.createBuffer(),
+            gl.createBuffer(),
+        ];
+
+        // Input buffers
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffers[BufferType.A]);
+        gl.bufferData(gl.ARRAY_BUFFER, a_fp64, gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffers[BufferType.B]);
+        gl.bufferData(gl.ARRAY_BUFFER, b_fp64, gl.STATIC_DRAW);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+        // Output buffer
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffers[BufferType.RESULT]);
+        gl.bufferData(gl.ARRAY_BUFFER, result_fp64, gl.STATIC_COPY);
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+        const vertexArray = gl.createVertexArray();
+        gl.bindVertexArray(vertexArray);
+
+        const locationA = 0;
+        const locationB = 1;
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffers[BufferType.A]);
+        gl.vertexAttribPointer(locationA, 2, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(locationA);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffers[BufferType.B]);
+        gl.vertexAttribPointer(locationB, 2, gl.FLOAT, false, 0, 0);
+        gl.enableVertexAttribArray(locationB);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, null);
+        gl.bindVertexArray(null);
+
+        const transformFeedback = gl.createTransformFeedback();
+        gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, transformFeedback);
+        gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, buffers[BufferType.RESULT]);
+        gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+        gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, null);
+
+       /**********************************************************************
+        * RENDER
+        */
+
+        gl.clearColor(0.0, 0.5, 0.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
+        gl.enable(gl.RASTERIZER_DISCARD);
+
+        gl.useProgram(program);
+
+        gl.uniform1f(gl.getUniformLocation(program, 'ONE'), 1.0);
+
+        gl.bindVertexArray(vertexArray);
+        gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, transformFeedback);
+
+        gl.beginTransformFeedback(gl.POINTS);
+        gl.drawArraysInstanced(gl.POINTS, 0, VERTEX_COUNT, 1);
+        gl.endTransformFeedback();
+        gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+
+        gl.disable(gl.RASTERIZER_DISCARD);
+
+       /**********************************************************************
+        * READ BUFFER
+        */
+
+        gl.bindBuffer(gl.COPY_READ_BUFFER, buffers[BufferType.RESULT]);
+        gl.getBufferSubData(gl.COPY_READ_BUFFER, 0, result_fp64);
+        gl.bindBuffer(gl.COPY_READ_BUFFER, null);
+
+        /**********************************************************************
+         * CLEANUP
+         */
+
+        gl.deleteTransformFeedback(transformFeedback);
+        gl.deleteBuffer(buffers[BufferType.A]);
+        gl.deleteBuffer(buffers[BufferType.B]);
+        gl.deleteBuffer(buffers[BufferType.RESULT]);
+        gl.deleteProgram(program);
+        gl.deleteVertexArray(vertexArray);
+
+
+        /**********************************************************************
+         * RESULTS
+         */
+
+        const table = document.createElement('table');
+        table.innerHTML = `
+        <thead>
+            <tr>
+                <td>a</td>
+                <td>b</td>
+                <td>expected</td>
+                <td>actual</td>
+                <td>ok</td>
+                <td>error</td>
+            </tr>
+        </thead>`
+
+        const rows = [];
+        let passed = 0;
+        let failed = 0;
+
+        for (let i = 0; i < expected.length; i++) {
+            const expectedValue = expected_fp64[i * 2] + expected_fp64[i * 2 + 1];
+            const actualValue = result_fp64[i * 2] + result_fp64[i * 2 + 1];
+            const isEqual = Math.abs(expectedValue - actualValue) < EPS;
+
+            rows.push({
+                a: a[i],
+                b: b[i],
+                expected_i: expected[i],
+                expected: expectedValue,
+                actual: actualValue,
+                equal: isEqual ? '✅' : '❌',
+                error: Math.abs(expectedValue - actualValue)
+            });
+
+            table.innerHTML += `
+            <tr>
+                <td>${a[i]}</td>
+                <td>${b[i]}</td>
+                <td>${expectedValue}</td>
+                <td>${actualValue}</td>
+                <td>${isEqual ? '✅' : '❌'}</td>
+                <td>${Math.abs(expectedValue - actualValue)}</td>
+            </tr>
+            `;
+
+            isEqual ? passed++ : failed++;
+        }
+
+        document.body.appendChild(table);
+
+        document.body.innerHTML += `<p>Passed: ${passed}<br>Failed: ${failed}<p>`;
+
+        console.table(rows);
+        console.log(`Passed: ${passed}`);
+        console.log(`Failed: ${failed}`);
+    </script>
+
+</body>
+</html>
